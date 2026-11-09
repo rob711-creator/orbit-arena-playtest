@@ -546,16 +546,16 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
       <h2>Settings</h2>
       <div class="tune">
         <label for="speed">Top speed</label>
-        <input id="speed" type="range" min="70" max="300" step="5" value="100" aria-describedby="circle-help">
-        <output id="speed-out" for="speed">100%</output>
+        <input id="speed" type="range" min="70" max="300" step="5" value="175" aria-describedby="circle-help">
+        <output id="speed-out" for="speed">175%</output>
       </div>
       <div class="tune">
         <label for="circle">Joystick sensitivity</label>
         <input id="circle" type="range" min="50" max="200" step="5" value="100" aria-describedby="circle-help">
         <output id="circle-out" for="circle">100%</output>
       </div>
-      <p id="circle-help" class="setting-help">Higher sensitivity makes short thumb movements faster. Top speed sets your maximum flight speed.</p>
-      <div><button id="speed-reset" type="button">Reset both</button></div>
+      <p id="circle-help" class="setting-help">Higher sensitivity makes short thumb movements faster. Top speed sets your maximum flight speed. Balanced defaults: 175% speed and 100% sensitivity.</p>
+      <div><button id="speed-reset" type="button">Reset to balanced</button></div>
       <div class="setrow sound-row">
         <label for="sound-sel">Sound</label>
         <select id="sound-sel">
@@ -600,7 +600,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
           <div><dt>Wave</dt><dd id="r-wave">1</dd></div>
           <div><dt>Best score</dt><dd id="r-best">0</dd></div>
           <div><dt>Best time</dt><dd id="r-besttime">0:00.0</dd></div>
-          <div><dt>Top speed</dt><dd id="r-speed">100%</dd></div>
+          <div><dt>Top speed</dt><dd id="r-speed">175%</dd></div>
           <div><dt>Joystick sensitivity</dt><dd id="r-circle">100%</dd></div>
         </dl>
       </details>
@@ -624,7 +624,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
   var COL = ['#5fd4ff', '#5fd4ff', '#d65cff', '#e26bff', '#ee7dff', '#f691ff'];
   var THREAT = '#ff2d55';
   var taught = false;
-  var tutorial = { active: false, time: 0, done: 0, grabbed: false, got: 0, stage: 'move', moved: 0, wrapped: false, wait: 0 };
+  var tutorial = { active: false, time: 0, done: 0, grabbed: false, got: 0, stage: 'move', moved: 0, fired: false, wrapped: false, wait: 0 };
   /* magnet mode keeps its own records; the older catch-mode keys are left untouched */
   try { taught = localStorage.getItem('orbit-mag-taught') === '1'; } catch (e) { taught = false; }
   var ENEMY = '#ff5d73', INK = '#ece9ff';
@@ -730,16 +730,17 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
       var n = Number(raw); return Number.isFinite(n) ? n : null;
     } catch (err) { return null; }
   }
-  var speedPct = 100;
+  var DEFAULT_SPEED = 175;
+  var speedPct = DEFAULT_SPEED;
   function setSpeed(v, persist) {
-    v = Number(v); if (!Number.isFinite(v)) v = 100;
+    v = Number(v); if (!Number.isFinite(v)) v = DEFAULT_SPEED;
     speedPct = Math.max(70, Math.min(300, Math.round(v / 5) * 5));
     $('speed').value = String(speedPct);
     $('speed-out').textContent = speedPct + '%';
     if (persist) store('orbit-speed', String(speedPct));
   }
   var savedSpeed = savedControl('orbit-speed');
-  setSpeed(savedSpeed === null ? 100 : savedSpeed, false);
+  setSpeed(savedSpeed === null ? DEFAULT_SPEED : savedSpeed, false);
   $('speed').addEventListener('input', function () { setSpeed(this.value, true); });
   $('speed').addEventListener('change', function () { setSpeed(this.value, true); });
 
@@ -764,7 +765,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
   $('circle').addEventListener('input', function () { setSensitivity(this.value, true); });
   $('circle').addEventListener('change', function () { setSensitivity(this.value, true); });
   $('speed-reset').addEventListener('click', function () {
-    setSpeed(100, true);
+    setSpeed(DEFAULT_SPEED, true);
     setSensitivity(100, true);
   });
 
@@ -1288,7 +1289,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
     mode = 'play';
     t = 0; score = 0; kills = 0; energy = 100; caught = 0; shots = 0; shake = 0;
     bullets = []; enemies = []; sparks = []; texts = []; rings = []; packs = [];
-    P.x = W / 2; P.y = H / 2; P.vx = 0; P.vy = 0; P.inv = 1.2; P.cool = 0.25; P.aim = -Math.PI / 2;
+    P.x = W / 2; P.y = H / 2; P.vx = 0; P.vy = 0; P.inv = 1.2; P.cool = 0; P.aim = -Math.PI / 2;
     target = null; hintT = 0; readyT = 0;
     booms = []; hurtFlash = 0; freeze = 0;
     applySound();
@@ -1314,14 +1315,16 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
     magSpawnT = MAG_FIRST; aidT = AID_EVERY; wave = 1; varietyStage = 1; emergT = -1; spawnT = 1.2;
     packs = []; spawnQ = []; enemies = [];
   }
-  /* Real input and a real first wrap teach the loop; only then is the lesson shot
-     kept in a small orbit so a learner can take as long as they need. */
+  /* Controls stay live throughout the safe lesson. Only the first volley
+     supplies the teaching shot; later volleys never reset the lesson. */
   function setupLesson() {
-    tutorial.stage = 'move'; tutorial.moved = 0; tutorial.wrapped = false; tutorial.wait = 0;
+    tutorial.stage = 'move'; tutorial.moved = 0; tutorial.fired = false;
+    tutorial.wrapped = false; tutorial.wait = 0;
     P.inv = 0;
   }
   function lessonStage(stage) { tutorial.stage = stage; syncChrome(); }
   function lessonMagnet() {
+    for (var p = 0; p < packs.length; p++) if (packs[p].lesson) return;
     for (var i = 0; i < bullets.length; i++) if (bullets[i].tut) {
       var b = bullets[i];
       packs.push({ kind: 'mag', x: b.cx, y: b.cy, life: Infinity, max: Infinity, lesson: true, born: clock });
@@ -1332,7 +1335,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
   function lessonWrap(b) {
     if (!tutorial.active || !b.lessonShot || tutorial.wrapped) return;
     tutorial.wrapped = true; tutorial.wait = 1.25;
-    /* Preserve the shot's edge-entry position and its real damage/wrap count. */
+    /* Preserve the real edge-entry position, damage and wrap count. */
     var margin = Math.min(90, (magR() - 10) / Math.SQRT2, W / 4, H / 4);
     b.tut = true;
     b.cx = Math.max(margin, Math.min(W - margin, b.x));
@@ -1343,10 +1346,15 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
   }
   function updateLesson(dt) {
     tutorial.time += dt;
-    if (tutorial.stage === 'fire' && ammo < 1) {
+    /* Free firing uses the same reserve recharge as a run, even after Fire. */
+    if (ammo < AMMO_RESERVE) {
       reserveRegen += dt;
-      if (reserveRegen >= AMMO_REGEN_EVERY) { ammo += 1; reserveRegen = 0; }
+      while (reserveRegen + 1e-9 >= AMMO_REGEN_EVERY && ammo < AMMO_RESERVE) {
+        ammo += 1;
+        reserveRegen = Math.max(0, reserveRegen - AMMO_REGEN_EVERY);
+      }
     }
+    if (ammo >= AMMO_RESERVE) reserveRegen = 0;
     if (tutorial.stage === 'return' && tutorial.wrapped) {
       tutorial.wait -= dt;
       if (tutorial.wait <= 0) lessonMagnet();
@@ -1355,15 +1363,15 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
   }
   function lessonPrompt() {
     var visibleDeck = coarse || view.width <= 800 || view.height <= 500;
-    if (tutorial.stage === 'move') return ['Move your ship.', visibleDeck ? 'Drag MOVE, or use WASD / arrows.' : 'Use WASD or the arrow keys.'];
-    if (tutorial.stage === 'fire') return ['Fire a volley.', visibleDeck ? 'Hold FIRE or Space.' : 'Hold Space or click the arena.'];
+    if (tutorial.stage === 'move') return ['Move your ship. You can fire too.', visibleDeck ? 'Drag MOVE. Tap or hold FIRE.' : 'WASD / arrows to move. Space / click to fire.'];
+    if (tutorial.stage === 'fire') return ['Fire a volley.', visibleDeck ? 'Tap or hold FIRE or Space.' : 'Tap or hold Space, or click the arena.'];
     if (tutorial.stage === 'return') return tutorial.wrapped
-      ? ['Your shot came back!', 'Live shots can hurt you during a run.']
-      : ['Watch your shot cross the edge.', 'It returns from the opposite side.'];
+      ? ['Your shot came back!', 'Keep moving and firing. You are safe here.']
+      : ['Watch your shot cross the edge.', 'Keep firing: your shots return from the other side.'];
     if (tutorial.stage === 'magnet') return ['Move onto the cyan M magnet.', 'Its field pulls in live shots. You are safe here.'];
     if (tutorial.stage === 'recover') return ['Sweep up your returning shot.', 'Move toward it while the cyan field is on.'];
     return ['Recovered: +' + recovered + ' ammo, +' + recovered + ' upgrade progress.',
-      'Magnet: +8 ammo. Start fresh with 32 when ready.'];
+      'Keep practicing, or choose Start for a fresh run.'];
   }
   function showCue(big, small, col, dur) { cue = { big: big, small: small, col: col, t: dur }; }
   function magR() { return Math.min(MAG_R, Math.max(90, Math.min(W, H) * 0.38)); }
@@ -1497,20 +1505,27 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
   }
 
   function shoot() {
-    if (tutorial.active && tutorial.stage !== 'fire') return true;
     if (ammo <= 0) return false;
+    var lessonVolley = tutorial.active && !tutorial.fired;
     var spec = TIER_SHOT[tier], n = volleyCount(ammo, tier);
     for (var k = 0; k < n; k++) {
       /* Centre the complete fan on the aim; a last remaining round stays straight. */
       var ang = P.aim + (k - (n - 1) / 2) * VOLLEY_SPREAD, c = Math.cos(ang), sn = Math.sin(ang);
       bullets.push({ x: mod(P.x + c * 20, W), y: mod(P.y + 1 + sn * 20, H), vx: c * BSPD, vy: sn * BSPD,
         dmg: spec.dmg, base: spec.dmg, wraps: 0, tier: tier, pierce: spec.pierce, hit: spec.pierce ? [] : null, nova: spec.nova,
-        armed: false, born: t, lessonShot: tutorial.active && k === 0 });
+        armed: false, born: t, lessonShot: lessonVolley && k === 0 });
     }
     ammo -= n;
-    if (bullets.length > MAX_BULLETS) bullets.splice(0, bullets.length - MAX_BULLETS);
+    /* Keep the one teaching shot recoverable if a learner keeps firing. */
+    for (var excess = bullets.length - MAX_BULLETS, bi = 0; excess > 0 && bi < bullets.length;) {
+      if (tutorial.active && bullets[bi].lessonShot) bi++;
+      else { bullets.splice(bi, 1); excess--; }
+    }
     shots += n;
-    if (tutorial.active) lessonStage('return');
+    if (lessonVolley) {
+      tutorial.fired = true;
+      if (tutorial.stage === 'fire') lessonStage('return');
+    }
     sfx.shoot(tier);
     var c0 = Math.cos(P.aim), s0 = Math.sin(P.aim);
     booms.push({ x: mod(P.x + c0 * 24, W), y: mod(P.y + 1 + s0 * 24, H), r: tier === 3 ? 22 : 15, life: 0.1, max: 0.1, col: TIERS[tier].col });
@@ -1535,7 +1550,11 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
     P.y = mod(P.y + P.vy * dt, H);
     if (tutorial.active && tutorial.stage === 'move') {
       tutorial.moved += Math.hypot(P.vx, P.vy) * dt;
-      if (tutorial.moved >= 48) lessonStage('fire');
+      if (tutorial.moved >= 48) {
+        if (!tutorial.fired) lessonStage('fire');
+        else if (tutorial.wrapped) lessonMagnet();
+        else lessonStage('return');
+      }
     }
     /* jetpack exhaust */
     jetT -= dt;
@@ -1565,14 +1584,18 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
     }
     if (cue) { cue.t -= dt; if (cue.t <= 0) cue = null; }
 
-    var fire = mouse.down || keys.has('Space') || touchFire.active || deckFireHeld() || deckFirePulse;
+    var heldFire = mouse.down || keys.has('Space') || touchFire.active || deckFireHeld();
+    /* Once a frame observes a hold, normal hold/release semantics own it.
+       Only a tap completed between frames needs the one-shot buffer. */
+    if (heldFire && fireTapSource !== null) { deckFirePulse = false; fireTapSource = null; }
+    var fire = heldFire || deckFirePulse;
     /* Carry sub-frame overshoot while firing, without banking idle/dry time. */
     P.cool = Math.max(P.cool - dt, -dt);
     if (P.inv > 0) P.inv -= dt;
     if (emptyT > 0) emptyT -= dt;
     if (!fire) P.cool = Math.max(0, P.cool);
     if (fire && P.cool <= 1e-9) {
-      deckFirePulse = false;
+      deckFirePulse = false; fireTapSource = null;
       if (!shoot() && emptyT <= 0) {
         emptyT = 1.2; sfx.empty();
         texts.push({ x: P.x, y: P.y - 34, s: 'Reactor recharging', life: 1.2, col: MAGC });
@@ -1893,15 +1916,14 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
     if (caughtIt && !skipped) {
       tutorial.done = 1; lessonStage('done');
       taught = true; store('orbit-mag-taught', '1');
-      resetInput();
-      focusEl($('btn-skip'));
+      /* Keep controls and focus intact. Starting a scored run is deliberate. */
       return;
     }
     tutorial.active = false; tutorial.done = 0;
     bullets = []; sparks = []; texts = []; rings = []; booms = []; cue = null;
     startAction(); resetInput();
     energy = 100; hurtFlash = 0; shake = 0; freeze = 0;
-    P.x = W / 2; P.y = H / 2; P.vx = 0; P.vy = 0; P.inv = 1.2; P.cool = 0.25; P.aim = -Math.PI / 2;
+    P.x = W / 2; P.y = H / 2; P.vx = 0; P.vy = 0; P.inv = 1.2; P.cool = 0; P.aim = -Math.PI / 2;
     if (skipped) { taught = true; store('orbit-mag-taught', '1'); }
     showCue('GO', 'Aim is automatic · you choose when to fire', WARN, 1.6);
     syncChrome(); hud();
@@ -3064,13 +3086,21 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
 
 
   /* ---------- permanent, independently captured touch controls ---------- */
+  var fireTapSource = null;
+  function queueFireTap(source) {
+    if (mode !== 'play') return;
+    deckFirePulse = true; fireTapSource = source;
+  }
+  function cancelFireTap(source) {
+    if (fireTapSource === source) { deckFirePulse = false; fireTapSource = null; }
+  }
   function deckFireHeld() { return deckFireId !== -1 || deckFireKeys.size > 0; }
   function deckLive() { return mode === 'play' || mode === 'ready'; }
   function deckOwns(id) { return deckMoveId === id || deckFireId === id; }
   function resetDeckInput() {
     var moveId = deckMoveId, fireId = deckFireId;
     // Forget ownership before releasePointerCapture can dispatch lost capture.
-    deckMoveId = -1; deckFireId = -1; deckFireKeys.clear(); deckFirePulse = false;
+    deckMoveId = -1; deckFireId = -1; deckFireKeys.clear(); deckFirePulse = false; fireTapSource = null;
     if (!deckUI) return;
     [[deckUI.move, moveId], [deckUI.fire, fireId]].forEach(function (pair) {
       try { if (pair[1] !== -1 && pair[0].hasPointerCapture(pair[1])) pair[0].releasePointerCapture(pair[1]); } catch (err) { /* capture already released */ }
@@ -3122,7 +3152,10 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
     if (e.pointerId === deckMoveId) {
       deckMoveId = -1; control = deckUI.move;
       stickM.active = false; stickM.id = -1; stickM.dx = 0; stickM.dy = 0; stickM.mag = 0; stickM.kx = 0; stickM.ky = 0;
-    } else { deckFireId = -1; control = deckUI.fire; }
+    } else {
+      if (e.type !== 'pointerup') cancelFireTap('deck:' + e.pointerId);
+      deckFireId = -1; control = deckUI.fire;
+    }
     try { if (control.hasPointerCapture(e.pointerId)) control.releasePointerCapture(e.pointerId); } catch (err) { /* capture already released */ }
     syncDeck(); return true;
   }
@@ -3145,7 +3178,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
         stickM.dx = 0; stickM.dy = 0; stickM.mag = 0; stickM.kx = 0; stickM.ky = 0;
       } else {
         if (deckFireId !== -1) return;
-        deckFireId = e.pointerId; markUsed('fire');
+        deckFireId = e.pointerId; queueFireTap('deck:' + e.pointerId); markUsed('fire');
       }
       try { el.setPointerCapture(e.pointerId); } catch (err) { /* window handlers provide the fallback */ }
       syncDeck();
@@ -3161,7 +3194,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
       e.preventDefault(); e.stopPropagation();
       if (!deckLive() || e.repeat) return;
       if (direction) keys.add(e.code);
-      else if (el === deckUI.fire) { deckFireKeys.add(e.code); markUsed('fire'); initAudio(); }
+      else if (el === deckUI.fire) { deckFireKeys.add(e.code); queueFireTap('deck-key:' + e.code); markUsed('fire'); initAudio(); }
       syncDeck();
     });
     el.addEventListener('keyup', function (e) {
@@ -3172,6 +3205,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
       // A focus change releases this control without cancelling the other thumb.
       var pointerId = el === deckUI.move ? deckMoveId : deckFireId;
       if (pointerId !== -1) releaseDeckPointer({ pointerId: pointerId });
+      if (el === deckUI.fire && fireTapSource && fireTapSource.indexOf('deck-key:') === 0) { deckFirePulse = false; fireTapSource = null; }
       deckFireKeys.clear();
       ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].forEach(function (code) { keys.delete(code); });
       syncDeck();
@@ -3221,10 +3255,11 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
       } else {
         if (touchFire.active) return;
         touchFire.active = true; touchFire.id = e.pointerId; touchFire.x = p.x; touchFire.y = p.y;
+        queueFireTap('arena:' + e.pointerId);
         markUsed('fire');
       }
     } else if (e.button === 0) {
-      mouse.down = true;
+      mouse.down = true; queueFireTap('arena:' + e.pointerId);
     } else return;
     try { cv.setPointerCapture(e.pointerId); captures.add(e.pointerId); } catch (err) { /* capture is optional */ }
   });
@@ -3238,10 +3273,11 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
   function release(e) {
     if (releaseDeckPointer(e)) return;
     captures.delete(e.pointerId);
+    if (e.type !== 'pointerup') cancelFireTap('arena:' + e.pointerId);
     if (e.pointerType === 'touch') {
       if (stickM.id === e.pointerId) { stickM.active = false; stickM.id = -1; stickM.dx = 0; stickM.dy = 0; stickM.mag = 0; }
       if (touchFire.id === e.pointerId) { touchFire.active = false; touchFire.id = -1; }
-    } else if (e.button === 0 || e.type === 'pointercancel') { mouse.down = false; }
+    } else if (e.button === 0 || e.type === 'pointercancel' || e.type === 'lostpointercapture') { mouse.down = false; }
   }
   window.addEventListener('pointerup', release);
   window.addEventListener('pointercancel', release);
@@ -3290,7 +3326,10 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
     if (mode === 'play' || mode === 'ready') {
       if (BLOCK[e.code]) e.preventDefault();
       /* only a fresh press counts, so a key still held from before a reset stays released */
-      if (!e.repeat) keys.add(e.code);
+      if (!e.repeat) {
+        keys.add(e.code);
+        if (e.code === 'Space') queueFireTap('key:' + e.code);
+      }
     }
   });
   window.addEventListener('keyup', function (e) { keys.delete(e.code); });
