@@ -783,6 +783,8 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
   var audioChains = [], musicOut = null, effectsOut = null, audioLast = Object.create(null), audioDuckUntil = 0;
   var AUDIO_VOICES = 96, MUSIC_VOICES = 56, AUDIO_BPM = 120, AUDIO_STEP = 60 / AUDIO_BPM / 4;
   var pumpBus = null, reverbIR = null, sfxCombo = 0, sfxComboAt = 0;
+  /* audioLite: phones get the same score on a much lighter graph (no convolution hall, fewer oscillators and nodes) */
+  var audioLite = false, audioMin = false;
   /* Orbit / Event Horizon: original procedural score in D minor, 120 BPM, 32 bars.
      Sections A A B A; layers enter with combat intensity. No media, no network. */
   var CH = {
@@ -840,7 +842,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
     var send = ac.createGain(), damp = ac.createBiquadFilter(), wet = ac.createGain();
     send.gain.value = isMusic ? 0.2 : 0.08; damp.type = 'lowpass'; damp.frequency.value = isMusic ? 2600 : 3200; wet.gain.value = 0.6;
     input.connect(send); nodes.push(send, damp, wet);
-    if (isMusic && ac.createStereoPanner) {
+    if (isMusic && ac.createStereoPanner && !audioMin) {
       /* dotted-eighth ping-pong: the arpeggio and lead answer themselves across the field */
       var dl = ac.createDelay(1), dr = ac.createDelay(1), fb = ac.createGain(), pl = ac.createStereoPanner(), pr = ac.createStereoPanner();
       dl.delayTime.value = AUDIO_STEP * 3; dr.delayTime.value = AUDIO_STEP * 3; fb.gain.value = 0.34;
@@ -878,7 +880,9 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
       try {
         var AudioCtor = window.AudioContext || window.webkitAudioContext;
         if (!AudioCtor) return;
-        created = new AudioCtor({ latencyHint: 'interactive' }); ac = created;
+        audioLite = coarse || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+        if (audioLite) { AUDIO_VOICES = 56; MUSIC_VOICES = 32; }
+        created = new AudioCtor({ latencyHint: audioLite ? 'balanced' : 'interactive' }); ac = created;
         var comp = ac.createDynamicsCompressor();
         comp.threshold.value = -19; comp.knee.value = 14; comp.ratio.value = 6;
         comp.attack.value = 0.003; comp.release.value = 0.16;
@@ -890,7 +894,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
         effectsOut = ac.createGain(); effectsOut.gain.value = 0; effectsOut.connect(highpass);
         musicBus = ac.createGain(); sfxBus = ac.createGain(); audioChains = [];
         pumpBus = ac.createGain(); pumpBus.gain.value = 1; pumpBus.connect(musicBus);
-        try {
+        if (!audioLite) try {
           var irLen = Math.floor(ac.sampleRate * 2.1); reverbIR = ac.createBuffer(2, irLen, ac.sampleRate);
           for (var irc = 0; irc < 2; irc++) {
             var ird = reverbIR.getChannelData(irc), irLow = 0;
@@ -905,6 +909,18 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
         noiseBuf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
         var data = noiseBuf.getChannelData(0), previous = 0;
         for (var i = 0; i < data.length; i++) { var white = audioRandom() * 2 - 1; data[i] = white * 0.75 + previous * 0.25; previous = white; }
+        /* If the device still cannot render in time, shed load instead of dropping out. */
+        try {
+          if (ac.renderCapacity && ac.renderCapacity.start) {
+            ac.renderCapacity.start({ updateInterval: 2 });
+            ac.renderCapacity.addEventListener('update', function (ev) {
+              if (!ac || !(ev.underrunRatio > 0.04 || ev.averageLoad > 0.8) || audioMin) return;
+              if (!audioLite) { audioLite = true; AUDIO_VOICES = 56; MUSIC_VOICES = 32; }
+              else { audioMin = true; AUDIO_VOICES = 36; MUSIC_VOICES = 20; }
+              reverbIR = null; stopAudioVoices(false); resetAudioRooms(false);
+            });
+          }
+        } catch (capErr) { /* optional API */ }
         ac.onstatechange = function () {
           if (!ac) return;
           if (ac.state === 'running') applySound();
@@ -990,7 +1006,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
     audioGain(musicOut.gain, musicVolume * (playing ? 1.1 : 0.7) * duck, 0.08);
   }
   function audioVoice(options) {
-    if (!ac || ac.state !== 'running' || !audioAllowed()) return;
+    if (!ac || ac.state !== 'running' || !audioAllowed() || (audioLite && options.extra)) return;
     var isMusic = options.bus === musicBus || options.bus === pumpBus;
     if ((isMusic && (!music.enabled || soundMode !== 0)) || (!isMusic && effectsVolume <= 0)) return;
     var musicCount = 0;
@@ -1020,7 +1036,8 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
         source.frequency.setValueAtTime(freq, when);
         if (options.slide) source.frequency.exponentialRampToValueAtTime(Math.max(25, freq * options.slide), when + duration);
         if (options.detune) source.detune.value = options.detune;
-        if (options.stack) for (var si = 0; si < options.stack.length; si++) {
+        var stackCount = !options.stack || audioMin ? 0 : audioLite ? 1 : options.stack.length;
+        for (var si = 0; si < stackCount; si++) {
           /* detuned unison partners share this voice's filter and envelope */
           var partner = ac.createOscillator(); partner.type = options.stackType || source.type;
           partner.frequency.setValueAtTime(freq, when);
@@ -1035,7 +1052,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
           modGain.gain.exponentialRampToValueAtTime(Math.max(1, options.fm.depth * 0.04), when + duration);
           modOsc.connect(modGain); modGain.connect(source.frequency); extras.push(modOsc); nodes.push(modOsc, modGain);
         }
-        if (options.vibrato) {
+        if (options.vibrato && !audioLite) {
           var lfo = ac.createOscillator(), lfoGain = ac.createGain();
           lfo.frequency.value = 5.6; lfoGain.gain.setValueAtTime(0, when);
           lfoGain.gain.linearRampToValueAtTime(options.vibrato, when + Math.min(duration, 0.3));
@@ -1048,7 +1065,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
       if (options.hold) gain.gain.setValueAtTime(peak * 0.7, when + duration * 0.62);
       gain.gain.exponentialRampToValueAtTime(0.0001, when + duration);
       var tail = gain;
-      if (ac.createStereoPanner && options.pan) {
+      if (ac.createStereoPanner && options.pan && !audioLite) {
         var pan = ac.createStereoPanner(); nodes.push(pan); pan.pan.value = Math.max(-0.8, Math.min(0.8, options.pan));
         tail.connect(pan); tail = pan;
       }
@@ -1077,8 +1094,8 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
       filter: color === 'pad' ? 1200 : 2200, filterEnd: color === 'pad' ? 420 : 550,
       attack: color === 'pad' ? 0.28 : 0.008, hold: color === 'pad', pan: pan || 0, bus: musicBus });
   }
-  function musicNoise(when, duration, vol, frequency, pan, type, end) {
-    audioVoice({ noise: true, when: when, duration: duration, vol: vol, filter: frequency, filterType: type || 'bandpass',
+  function musicNoise(when, duration, vol, frequency, pan, type, end, extra) {
+    audioVoice({ extra: !!extra, noise: true, when: when, duration: duration, vol: vol, filter: frequency, filterType: type || 'bandpass',
       filterEnd: end || frequency * 0.65, q: 0.8, pan: pan || 0, bus: musicBus });
   }
   function musicBell(note, when, duration, vol, pan) {
@@ -1092,8 +1109,22 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
     var phase = (((position % 4) + 4) % 4) / 4;
     return Math.pow(1 - phase, 3);
   }
+  var audioWatch = { t: 0, p: 0, strikes: 0 };
+  function audioWatchdog() {
+    var p = performance.now() / 1000, t = ac.currentTime, dp = p - audioWatch.p, dt = t - audioWatch.t;
+    if (!audioWatch.p || dp > 4 || dt < 0) { audioWatch.p = p; audioWatch.t = t; return; }
+    if (dp < 2) return;
+    audioWatch.p = p; audioWatch.t = t;
+    if ((dp - dt) / dp > 0.03) audioWatch.strikes++; else audioWatch.strikes = 0;
+    if (audioWatch.strikes < 2 || audioMin) return;
+    audioWatch.strikes = 0;
+    if (!audioLite) { audioLite = true; AUDIO_VOICES = 56; MUSIC_VOICES = 32; }
+    else { audioMin = true; AUDIO_VOICES = 36; MUSIC_VOICES = 20; }
+    reverbIR = null; stopAudioVoices(false); resetAudioRooms(false);
+  }
   function scheduleMusic() {
-    if (!ac || ac.state !== 'running' || !music.enabled || !audioAllowed()) return;
+    if (!ac || ac.state !== 'running' || !music.enabled || !audioAllowed()) { audioWatch.p = 0; return; }
+    audioWatchdog();
     updateAudioMix();
     if (music.next < ac.currentTime - 0.05) music.next = ac.currentTime + 0.04;
     var guard = 0, live = mode === 'play' || mode === 'ready';
@@ -1127,7 +1158,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
         var kick = step % 4 === 0 && !(fill && step === 12);
         if (kick) {
           audioVoice({ freq: 152, slide: 0.27, when: when, duration: 0.25, vol: 0.3, bus: musicBus });
-          musicNoise(when, 0.016, 0.085, 3600, 0);
+          musicNoise(when, 0.016, 0.085, 3600, 0, 'bandpass', 0, true);
           try { pumpBus.gain.setValueAtTime(0.4, when); pumpBus.gain.linearRampToValueAtTime(1, when + AUDIO_STEP * 1.9); } catch (pumpErr) { /* optional */ }
         }
         if (step === 0 && b8 === 0) musicNoise(when, 1.7, 0.05, 5200, 0.1, 'highpass', 2800);
@@ -1135,15 +1166,15 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
         if (step === 4 || step === 12 || (fill && step > 12)) {
           var ghost = fill && step > 12, sv = ghost ? 0.07 + (step - 12) * 0.022 : 0.16;
           musicNoise(when, 0.17, sv, 1900, 0.06);
-          musicNoise(when, 0.11, sv * 0.45, 5200, -0.06, 'highpass', 4200);
+          musicNoise(when, 0.11, sv * 0.45, 5200, -0.06, 'highpass', 4200, true);
           audioVoice({ freq: 196, slide: 0.7, when: when, duration: 0.1, vol: sv * 0.75, type: 'triangle', bus: musicBus });
-          if (intensity > 0.45 && !ghost) { musicNoise(when + 0.011, 0.05, 0.05, 1300, 0.2); musicNoise(when + 0.024, 0.09, 0.05, 1250, -0.2); }
+          if (intensity > 0.45 && !ghost) { musicNoise(when + 0.011, 0.05, 0.05, 1300, 0.2, 'bandpass', 0, true); musicNoise(when + 0.024, 0.09, 0.05, 1250, -0.2, 'bandpass', 0, true); }
         }
         /* Offbeat hats; sixteenths and an open hat as intensity climbs. */
         if (step % 4 === 2) musicNoise(when, 0.05, 0.085, 8200, 0.25, 'highpass', 7600);
-        else if (intensity > 0.45 && step % 2 === 1) musicNoise(when + 0.008, 0.03, 0.04, 9000, step % 4 === 1 ? -0.35 : 0.35, 'highpass', 8600);
+        else if (intensity > 0.45 && step % 2 === 1) musicNoise(when + 0.008, 0.03, 0.04, 9000, step % 4 === 1 ? -0.35 : 0.35, 'highpass', 8600, true);
         if (intensity > 0.32 && step === 14 && bar % 2) musicNoise(when, 0.24, 0.06, 7200, -0.2, 'highpass', 6000);
-        if (intensity > 0.72 && step % 4 === 3) musicNoise(when, 0.035, 0.022, 4200, 0.45);
+        if (intensity > 0.72 && step % 4 === 3) musicNoise(when, 0.035, 0.022, 4200, 0.45, 'bandpass', 0, true);
         if (fill && step === 8 && intensity > 0.38) audioVoice({ noise: true, when: when, duration: AUDIO_STEP * 8, vol: 0.055, filter: 500, filterEnd: 6800, q: 1.2, attack: AUDIO_STEP * 6.5, bus: musicBus });
         /* Rolling eighth-note bass with octave lifts, plus a clean sub underneath. */
         if (step % 2 === 0) {
@@ -1155,7 +1186,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
         }
         if (step === 0 || step === 8) audioVoice({ freq: mtof(chord.root), when: when, duration: AUDIO_STEP * 7.4, vol: 0.08, attack: 0.012, hold: true, bus: pumpBus });
         /* Sixteenth arpeggio: the filter opens with intensity and the delay does the rest. */
-        if (intensity > 0.3 || section > 0) {
+        if ((intensity > 0.3 || section > 0) && !(audioMin && step % 2)) {
           var arp = chord.pad[ARP_SEQ[step]] + 12 + (bar % 2 && step >= 8 ? 12 : 0);
           audioVoice({ freq: mtof(arp), when: when, duration: AUDIO_STEP * 1.5, type: 'sawtooth', vol: 0.07 + intensity * 0.03,
             filter: 2200 + intensity * 3400, filterEnd: 480, q: 3.2, pan: step % 2 ? 0.42 : -0.42, bus: pumpBus });
@@ -1167,7 +1198,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
             var ln = phrase[i][1], ld = phrase[i][2] * AUDIO_STEP * 0.96;
             audioVoice({ freq: mtof(ln), when: when, duration: ld, type: 'sawtooth', stack: [-8, 8], vibrato: 14,
               vol: 0.12, filter: 3200 + intensity * 1500, filterEnd: 1500, q: 1.4, attack: 0.018, hold: true, pan: 0.08, bus: musicBus });
-            if (section === 3 || intensity > 0.8) musicBell(ln + 12, when, Math.min(0.9, ld), 0.04, -0.25);
+            if ((section === 3 || intensity > 0.8) && !audioLite) musicBell(ln + 12, when, Math.min(0.9, ld), 0.04, -0.25);
           }
         }
         /* Low energy: a heartbeat under everything. */
@@ -1197,18 +1228,18 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
         audioVoice({ freq: 215 * p, slide: 0.3, duration: 0.27, type: 'sawtooth', stack: [-14, 14], filter: 1700, filterEnd: 240, q: 1.5, vol: 0.2 });
         tone(64, 0.24, 'sine', 0.26, 0.6);
         audioVoice({ noise: true, duration: 0.13, vol: 0.1, filter: 2600, filterEnd: 500, filterType: 'lowpass' });
-        audioVoice({ freq: 1480 * p, duration: 0.09, vol: 0.035, fm: { ratio: 2.4, depth: 1800 } });
+        audioVoice({ extra: true, freq: 1480 * p, duration: 0.09, vol: 0.035, fm: { ratio: 2.4, depth: 1800 } });
       } else if (tr >= 1) {
         audioVoice({ freq: 1240 * p, slide: 0.16, duration: 0.13, type: 'sawtooth', filter: 5400, filterEnd: 750, q: 3, vol: 0.085, pan: tr === 2 ? -0.22 : 0 });
-        audioVoice({ freq: 640 * p, slide: 0.5, duration: 0.1, vol: 0.05, fm: { ratio: 2.5, depth: 950 } });
+        audioVoice({ extra: true, freq: 640 * p, slide: 0.5, duration: 0.1, vol: 0.05, fm: { ratio: 2.5, depth: 950 } });
         if (tr === 2) audioVoice({ freq: 1120 * p, slide: 0.18, duration: 0.13, when: now + 0.02, type: 'sawtooth', filter: 5000, filterEnd: 800, q: 3, vol: 0.07, pan: 0.26 });
         tone(128, 0.1, 'sine', 0.12, 0.6);
-        hiss(0.04, 0.06, 6500, 1400);
+        if (!audioLite) hiss(0.04, 0.06, 6500, 1400);
       } else {
         audioVoice({ freq: 900 * p, slide: 0.2, duration: 0.11, type: 'sawtooth', filter: 4300, filterEnd: 650, q: 2.2, vol: 0.085 });
-        audioVoice({ freq: 1800 * p, slide: 0.3, duration: 0.05, type: 'square', filter: 5200, vol: 0.022 });
+        audioVoice({ extra: true, freq: 1800 * p, slide: 0.3, duration: 0.05, type: 'square', filter: 5200, vol: 0.022 });
         tone(150, 0.09, 'sine', 0.12, 0.5);
-        hiss(0.035, 0.055, 6000, 1500);
+        if (!audioLite) hiss(0.035, 0.055, 6000, 1500);
       }
     },
     hit: function (x) {
@@ -1216,21 +1247,21 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
       var pan = audioPan(x), p = audioVar(0.9, 1.12);
       audioVoice({ noise: true, duration: 0.065, vol: 0.11, filter: 3200, filterEnd: 900, q: 2, pan: pan });
       audioVoice({ freq: 820 * p, duration: 0.08, vol: 0.06, fm: { ratio: 3.4, depth: 1300 }, pan: pan });
-      audioVoice({ freq: 235, slide: 0.5, duration: 0.06, type: 'triangle', vol: 0.085, pan: pan });
+      audioVoice({ extra: true, freq: 235, slide: 0.5, duration: 0.06, type: 'triangle', vol: 0.085, pan: pan });
     },
     kill: function (pw, type, x) {
       if (!audioEvent('kill', 0.06)) return;
       var big = type === 'tank' || type === 'splitter', small = type === 'swarm', pan = audioPan(x), now = ac.currentTime, p = audioVar(0.92, 1.08);
       audioVoice({ noise: true, duration: big ? 0.62 : small ? 0.2 : 0.36, vol: big ? 0.25 : small ? 0.12 : 0.19, filter: big ? 3400 : 4200, filterEnd: 130, filterType: 'lowpass', pan: pan });
       audioVoice({ freq: (big ? 84 : small ? 150 : 116) * p, slide: 0.32, duration: big ? 0.52 : small ? 0.16 : 0.3, vol: big ? 0.36 : small ? 0.14 : 0.27, pan: pan * 0.5 });
-      audioVoice({ freq: 165 * p, slide: 0.3, duration: 0.22, type: 'sawtooth', filter: 950, filterEnd: 120, vol: small ? 0.04 : 0.085, pan: pan });
-      audioVoice({ noise: true, when: now + 0.035, duration: 0.09, vol: 0.055, filter: 5400, q: 1.5, pan: pan });
+      audioVoice({ extra: true, freq: 165 * p, slide: 0.3, duration: 0.22, type: 'sawtooth', filter: 950, filterEnd: 120, vol: small ? 0.04 : 0.085, pan: pan });
+      audioVoice({ extra: true, noise: true, when: now + 0.035, duration: 0.09, vol: 0.055, filter: 5400, q: 1.5, pan: pan });
       /* the reward note climbs with the lap multiplier */
       bell([62, 65, 69, 72, 74, 77][Math.max(0, Math.min(5, (pw || 1) - 1))] + 12, 0.32, 0.055, now + 0.02, pan);
       if (big) {
         audioDuck(0.25);
         audioVoice({ noise: true, when: now + 0.12, duration: 0.5, vol: 0.12, filter: 900, filterEnd: 90, filterType: 'lowpass', pan: pan });
-        for (var k = 0; k < 3; k++) bell(86 + Math.floor(audioRandom() * 12), 0.12, 0.022, now + 0.1 + k * 0.07 + audioRandom() * 0.04, pan + audioVar(-0.3, 0.3), 4.2);
+        if (!audioLite) for (var k = 0; k < 3; k++) bell(86 + Math.floor(audioRandom() * 12), 0.12, 0.022, now + 0.1 + k * 0.07 + audioRandom() * 0.04, pan + audioVar(-0.3, 0.3), 4.2);
       }
     },
     hurt: function () {
@@ -1294,7 +1325,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; o
       audioDuck(0.7);
       [62, 69, 74, 78, 81, 86].forEach(function (note, i) {
         audioVoice({ freq: mtof(note), when: now + i * 0.07, duration: 0.42, type: 'sawtooth', stack: [-10, 10], filter: 3200, filterEnd: 900, vol: 0.085, pan: (i - 2.5) * 0.14 });
-        bell(note + 12, 0.36, 0.035, now + i * 0.07, (2.5 - i) * 0.14);
+        if (!audioLite) bell(note + 12, 0.36, 0.035, now + i * 0.07, (2.5 - i) * 0.14);
       });
       [74, 78, 81].forEach(function (note) {
         audioVoice({ freq: mtof(note), when: now + 0.46, duration: 0.8, type: 'sawtooth', stack: [-9, 9], filter: 2800, filterEnd: 700, vol: 0.07, attack: 0.02, hold: true });

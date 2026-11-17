@@ -4,7 +4,7 @@ Public browser playtest of Orbit Arena. The `dist` folder is the Poki playtest p
 
 The hosting workflow publishes only `dist`; it does not rebuild or alter the game.
 
-Entrypoint SHA-256: `76ad353e09c0f19ee0046bb05fb2e17b7fdd6637f1f445a106f26cf56050f691`.
+Entrypoint SHA-256: `6912e8e438def23507ebb97192bd69c0879f34e0f1127b134a887378ba944274`.
 
 The current build keeps movement and firing available throughout the safe lesson, accepts quick fire taps, and uses a balanced default speed of 175%. Saved custom settings remain available.
 
